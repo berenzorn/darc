@@ -1,5 +1,5 @@
-from celery import Celery
 import lzma
+from celery import Celery
 
 app = Celery('tasks')
 app.conf.task_serializer = 'msgpack'
@@ -12,6 +12,6 @@ app.conf.result_backend = 'rpc://'
 
 
 @app.task
-def compress(chunk):
-    return lzma.compress(chunk, preset=lzma.PRESET_EXTREME)
+def compress(data):
+    return lzma.compress(data, preset=lzma.PRESET_EXTREME)
 

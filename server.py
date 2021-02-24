@@ -4,124 +4,105 @@ import shutil
 import sys
 import tarfile
 import threading
+from collections import namedtuple
 from math import ceil
 from pathlib import Path
 from sys import argv
 from tasks import compress
 from queue import Queue
 
-
-# with open('test2.lzma', 'ab') as file2:
-#     with open('test', 'rb') as file:
-#         while True:
-#             chunk = file.read(25600000)
-#             if not chunk:
-#                 break
-#             res = compress.delay(chunk)
-#             file2.write(res.get(timeout=30))
-#             print('.', end='')
+Block = namedtuple('Block', ['index', 'data'])
 
 
-def list_dir(dir, paths=[]):
-    for item in os.listdir(dir):
-        full_path = os.path.join(dir, item)
-        if os.path.isfile(full_path):
-            print('- file ' + full_path)
-            paths.append(full_path)
-            # os.remove(full_path)
-        elif os.path.isdir(full_path):
-            # print('- folder ' + full_path)
-            list_dir(full_path)
-            # shutil.rmtree(full_path)
-    return paths
+class Darc:
 
+    base = {}
+    CHUNK_SIZE = 2560000
+    q = Queue(maxsize=128)
+    event = threading.Event()
 
-class Block:
+    def __init__(self, source):
+        self.source = source.split('.')[0]
+        self.clean()
+        self.is_src_dir, self.src_size = self.is_it_dir(source)
+        self.dst_name = (f'{self.source}.tar.xz' if self.is_src_dir
+                         else f'{self.source}.xz')
+        self.dst_file = self.dst_file_open()
 
-    def __init__(self, index, data):
-        self.id = index
-        self.data = data
+    def clean(self):
+        try:
+            for ext in ['tar', 'xz', 'tar.xz']:
+                os.remove(f'{self.source}.{ext}')
+        except FileNotFoundError:
+            pass
 
+    def is_it_dir(self, source):
+        is_dir = False
+        if os.path.isdir(source):
+            paths = self.list_dir(source)
+            with tarfile.open(f'{self.source}.tar', "w") as tar:
+                for name in paths:
+                    tar.add(name)
+            is_dir = True
+            src_size = Path(f'{self.source}.tar').stat().st_size
+        else:
+            src_size = Path(source).stat().st_size
+        return is_dir, src_size
 
-def worker():
-    while True:
-        chunk = q.get()
-        data = compress.delay(chunk.data)
-        base[chunk.id] = data.get()
-        # file2.write(res.get())
-        # file3.write(str(chunk.id) + " ")
-        q.task_done()
+    def list_dir(self, folder, paths=[]):
+        for item in os.listdir(folder):
+            full_path = os.path.join(folder, item)
+            if os.path.isfile(full_path):
+                paths.append(full_path)
+            elif os.path.isdir(full_path):
+                self.list_dir(full_path)
+        return paths
 
+    def dst_file_open(self):
+        file = open(self.dst_name, 'wb')
+        return file
 
-def filer():
-    chunks = ceil(file_size / CHUNK_SIZE)
-    index = 0
-    while index < chunks:
-        if index in base.keys():
-            file2.write(base.pop(index))
-            file3.write(str(index) + ' ')
-            # base[index] = None
+    def dst_file_close(self):
+        self.dst_file.close()
+
+    def worker(self):
+        while True:
+            chunk = self.q.get()
+            data = lzma.compress(chunk.data)
+            # data = compress.delay(chunk.data)
+            self.base[chunk.id] = data
+            # self.base[chunk.id] = data.get()
+            self.q.task_done()
+
+    def filer(self):
+        chunks = ceil(self.src_size / self.CHUNK_SIZE)
+        index = 0
+        while index < chunks:
+            if index in self.base.keys():
+                self.dst_file.write(self.base.pop(index))
             index += 1
         else:
-            event.wait(0.5)
-
-# with open('test2.lzma', 'ab') as file2:
-#         res = compress.delay(chunk)
-#         file2.write(res.get(timeout=30))
-#         print('.', end='')
+            self.event.wait(0.5)
 
 
 if __name__ == '__main__':
+    darc = Darc(argv[1])
 
-    if os.path.isdir(argv[1]):
-        paths = list_dir(argv[1])
-        print(paths)
-        with tarfile.open(argv[1] + '.tar', "w") as tar:
-            for name in paths:
-                tar.add(name)
-        with open(argv[1] + '.tar.xz', 'wb') as xz:
-            with open(argv[1] + '.tar', 'rb') as tar:
-                xz.write(lzma.compress(tar.read()))
-    else:
-        with open(argv[1] + '.xz', 'wb') as xz:
-            with open(argv[1], 'rb') as tar:
-                xz.write(lzma.compress(tar.read()))
+    threads = 8
+    for _ in range(threads):
+        threading.Thread(target=darc.worker, daemon=True).start()
+    filer_thread = threading.Thread(target=darc.filer, daemon=True)
+    filer_thread.start()
 
-    # try:
-    #     with open(f'{argv[1]}.lzma', 'w') as f:
-    #         f.truncate(0)
-    # except FileNotFoundError:
-    #     pass
-    #
-    # base = {}
-    # CHUNK_SIZE = 2560000
-    # q = Queue(maxsize=128)
-    # event = threading.Event()
-    # try:
-    #     file_size = Path(argv[1]).stat().st_size
-    # except FileNotFoundError:
-    #     print('Wrong source file')
-    #     sys.exit(0)
-    # file2 = open(f'{argv[1]}.lzma', 'ab')
-    # file3 = open(f'{argv[1]}.index', 'w')
-    #
-    # threads = 8
-    # for _ in range(threads):
-    #     threading.Thread(target=worker, daemon=True).start()
-    # filer_thread = threading.Thread(target=filer, daemon=True)
-    # filer_thread.start()
-    #
-    # index = 0
-    # with open(argv[1], 'rb') as file:
-    #     while True:
-    #         chunk = Block(index, file.read(CHUNK_SIZE))
-    #         if not chunk.data:
-    #             break
-    #         q.put(chunk)
-    #         index += 1
-    # q.join()
-    # filer_thread.join()
-    # file2.close()
-    # file3.close()
-
+    index = 0
+    with open(argv[1], 'rb') as file:
+        while True:
+            chunk = Block(index, file.read(darc.CHUNK_SIZE))
+            if not chunk.data:
+                break
+            darc.q.put(chunk)
+            index += 1
+    darc.q.join()
+    filer_thread.join()
+    darc.dst_file_close()
 

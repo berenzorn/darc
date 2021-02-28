@@ -11,43 +11,49 @@ from sys import argv
 from tasks import compress
 from queue import Queue
 
-Block = namedtuple('Block', ['index', 'data'])
+Block = namedtuple('Block', ['id', 'data'])
+
+
+base = {}
 
 
 class Darc:
 
-    base = {}
-    CHUNK_SIZE = 2560000
-    q = Queue(maxsize=128)
-    event = threading.Event()
-
     def __init__(self, source):
-        self.source = source.split('.')[0]
+        self.CHUNK_SIZE = 2560000
+        self.q = Queue(maxsize=128)
+        self.event = threading.Event()
+        self.source_body = source.split('.')[0]
+        self.source_full = source
         self.clean()
-        self.is_src_dir, self.src_size = self.is_it_dir(source)
-        self.dst_name = (f'{self.source}.tar.xz' if self.is_src_dir
-                         else f'{self.source}.xz')
-        self.dst_file = self.dst_file_open()
+        self.is_src_dir = self.src_type()
+        self.src_size = self.create_tar()
+        self.src_name = (f'{self.source_body}.tar' if self.is_src_dir
+                         else f'{self.source_body}')
+        self.dst_name = (f'{self.source_body}.tar.xz' if self.is_src_dir
+                         else f'{self.source_body}.xz')
+        self.dst_file = self.dst_file_open(self.dst_name)
 
     def clean(self):
         try:
             for ext in ['tar', 'xz', 'tar.xz']:
-                os.remove(f'{self.source}.{ext}')
+                os.remove(f'{self.source_body}.{ext}')
         except FileNotFoundError:
             pass
 
-    def is_it_dir(self, source):
-        is_dir = False
-        if os.path.isdir(source):
-            paths = self.list_dir(source)
-            with tarfile.open(f'{self.source}.tar', "w") as tar:
+    def src_type(self):
+        return os.path.isdir(self.source_full)
+
+    def create_tar(self):
+        if os.path.isdir(self.source_full):
+            paths = self.list_dir(self.source_full)
+            with tarfile.open(f'{self.source_body}.tar', "w") as tar:
                 for name in paths:
                     tar.add(name)
-            is_dir = True
-            src_size = Path(f'{self.source}.tar').stat().st_size
+            tar_size = Path(f'{self.source_body}.tar').stat().st_size
         else:
-            src_size = Path(source).stat().st_size
-        return is_dir, src_size
+            tar_size = Path(self.source_full).stat().st_size
+        return tar_size
 
     def list_dir(self, folder, paths=[]):
         for item in os.listdir(folder):
@@ -58,8 +64,9 @@ class Darc:
                 self.list_dir(full_path)
         return paths
 
-    def dst_file_open(self):
-        file = open(self.dst_name, 'wb')
+    @staticmethod
+    def dst_file_open(destination):
+        file = open(destination, 'wb')
         return file
 
     def dst_file_close(self):
@@ -70,7 +77,8 @@ class Darc:
             chunk = self.q.get()
             data = lzma.compress(chunk.data)
             # data = compress.delay(chunk.data)
-            self.base[chunk.id] = data
+            base[chunk.id] = data
+            print(chunk.id, base[chunk.id][:20])
             # self.base[chunk.id] = data.get()
             self.q.task_done()
 
@@ -78,8 +86,10 @@ class Darc:
         chunks = ceil(self.src_size / self.CHUNK_SIZE)
         index = 0
         while index < chunks:
-            if index in self.base.keys():
-                self.dst_file.write(self.base.pop(index))
+            print(base.__len__())
+            if index in base.keys():
+                print('w' + str(index))
+                self.dst_file.write(base.pop(index))
             index += 1
         else:
             self.event.wait(0.5)
@@ -95,7 +105,7 @@ if __name__ == '__main__':
     filer_thread.start()
 
     index = 0
-    with open(argv[1], 'rb') as file:
+    with open(darc.src_name, 'rb') as file:
         while True:
             chunk = Block(index, file.read(darc.CHUNK_SIZE))
             if not chunk.data:
@@ -104,5 +114,14 @@ if __name__ == '__main__':
             index += 1
     darc.q.join()
     filer_thread.join()
+
+    # print(darc.base)
+    # print(darc.source_body)
+    # print(darc.source_full)
+    # print(darc.src_name)
+    # print(darc.dst_name)
+    # print(darc.dst_file)
+    # print(darc.src_size)
+
     darc.dst_file_close()
 

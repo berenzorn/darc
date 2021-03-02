@@ -15,3 +15,4 @@ app.conf.result_backend = 'rpc://'
 def compress(data):
     return lzma.compress(data, preset=lzma.PRESET_EXTREME)
 
+# celery -A tasks worker -P threads

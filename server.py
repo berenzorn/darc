@@ -1,37 +1,34 @@
-import lzma
 import os
-import shutil
-import sys
 import tarfile
 import threading
-from collections import namedtuple
 from math import ceil
 from pathlib import Path
 from sys import argv
 from tasks import compress
 from queue import Queue
 
-Block = namedtuple('Block', ['id', 'data'])
 
+class Block:
 
-base = {}
+    def __init__(self, index, data):
+        self.id = index
+        self.data = data
 
 
 class Darc:
 
     def __init__(self, source):
+        self.base = {}
         self.CHUNK_SIZE = 2560000
-        self.q = Queue(maxsize=128)
+        self.q = Queue(maxsize=256)
         self.event = threading.Event()
         self.source_body = source.split('.')[0]
         self.source_full = source
         self.clean()
         self.is_src_dir = self.src_type()
         self.src_size = self.create_tar()
-        self.src_name = (f'{self.source_body}.tar' if self.is_src_dir
-                         else f'{self.source_body}')
-        self.dst_name = (f'{self.source_body}.tar.xz' if self.is_src_dir
-                         else f'{self.source_body}.xz')
+        self.src_name = (f'{self.source_full}.tar' if self.is_src_dir else f'{self.source_full}')
+        self.dst_name = (f'{self.source_full}.tar.xz' if self.is_src_dir else f'{self.source_full}.xz')
         self.dst_file = self.dst_file_open(self.dst_name)
 
     def clean(self):
@@ -75,24 +72,21 @@ class Darc:
     def worker(self):
         while True:
             chunk = self.q.get()
-            data = lzma.compress(chunk.data)
-            # data = compress.delay(chunk.data)
-            base[chunk.id] = data
-            print(chunk.id, base[chunk.id][:20])
-            # self.base[chunk.id] = data.get()
+            # data = lzma.compress(chunk.data)
+            # self.base[chunk.id] = data
+            data = compress.delay(chunk.data)
+            self.base[chunk.id] = data.get()
             self.q.task_done()
 
     def filer(self):
         chunks = ceil(self.src_size / self.CHUNK_SIZE)
         index = 0
         while index < chunks:
-            print(base.__len__())
-            if index in base.keys():
-                print('w' + str(index))
-                self.dst_file.write(base.pop(index))
-            index += 1
-        else:
-            self.event.wait(0.5)
+            if index in self.base.keys():
+                self.dst_file.write(self.base.pop(index))
+                index += 1
+            else:
+                self.event.wait(0.5)
 
 
 if __name__ == '__main__':
@@ -103,7 +97,6 @@ if __name__ == '__main__':
         threading.Thread(target=darc.worker, daemon=True).start()
     filer_thread = threading.Thread(target=darc.filer, daemon=True)
     filer_thread.start()
-
     index = 0
     with open(darc.src_name, 'rb') as file:
         while True:
@@ -115,13 +108,4 @@ if __name__ == '__main__':
     darc.q.join()
     filer_thread.join()
 
-    # print(darc.base)
-    # print(darc.source_body)
-    # print(darc.source_full)
-    # print(darc.src_name)
-    # print(darc.dst_name)
-    # print(darc.dst_file)
-    # print(darc.src_size)
-
     darc.dst_file_close()
-

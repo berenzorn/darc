@@ -1,11 +1,13 @@
 import os
+import lzma
 import tarfile
+import argparse
 import threading
-from math import ceil
-from pathlib import Path
 from sys import argv
-from tasks import compress
+from math import ceil
 from queue import Queue
+from pathlib import Path
+from tasks import compress
 
 
 class Block:
@@ -17,10 +19,10 @@ class Block:
 
 class Darc:
 
-    def __init__(self, source):
+    def __init__(self, source, qsize):
         self.base = {}
         self.CHUNK_SIZE = 2560000
-        self.q = Queue(maxsize=256)
+        self.q = Queue(maxsize=qsize)
         self.event = threading.Event()
         self.source_body = source.split('.')[0]
         self.source_full = source
@@ -72,10 +74,10 @@ class Darc:
     def worker(self):
         while True:
             chunk = self.q.get()
-            # data = lzma.compress(chunk.data)
-            # self.base[chunk.id] = data
-            data = compress.delay(chunk.data)
-            self.base[chunk.id] = data.get()
+            data = lzma.compress(chunk.data)
+            self.base[chunk.id] = data
+            # data = compress.delay(chunk.data)
+            # self.base[chunk.id] = data.get()
             self.q.task_done()
 
     def filer(self):
@@ -89,14 +91,41 @@ class Darc:
                 self.event.wait(0.5)
 
 
-if __name__ == '__main__':
-    darc = Darc(argv[1])
+def get_q_size(threads):
+    return {
+        0 <= threads <= 2: 32,
+        3 <= threads <= 6: 16,
+        7 <= threads <= 8: 8,
+        9 <= threads <= 10: 4
+    }[True]
 
-    threads = 8
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source")
+    # group = parser.add_mutually_exclusive_group()
+    # group.add_argument("-a", "--arch", action="store_true", help="Add source to archive")
+    # group.add_argument("-u", "--unarch", action="store_true", help="Unpack archive")
+    parser.add_argument("-t", type=int, metavar=" 0-10", help="Cores in cluster (2^n). Default 2^3", default=3)
+    # parser.add_argument("-q", "--quiet", action="store_true", help="Quiet mode, no output")
+    # parser.add_argument("-l", type=str, dest="log", metavar=" LOG", help="Write output to log file")
+    args = parser.parse_args()
+
+    # threads = 1, 2, 4... 1024
+    threads = 2 ** args.t if 0 <= args.t <= 10 else 2 ** 3
+
+    # queue size is q_size times longer
+    try:
+        darc = Darc(args.source, (get_q_size(args.t) * threads))
+    except FileNotFoundError:
+        print("Wrong source")
+        raise SystemExit(0)
+
     for _ in range(threads):
         threading.Thread(target=darc.worker, daemon=True).start()
     filer_thread = threading.Thread(target=darc.filer, daemon=True)
     filer_thread.start()
+
     index = 0
     with open(darc.src_name, 'rb') as file:
         while True:
